@@ -1,0 +1,333 @@
+DROP TABLE IF EXISTS pessoa;
+CREATE TABLE pessoa(
+cpf				varchar(20) PRIMARY KEY,
+nomePessoa		varchar(50) NOT NULL,
+idade			int NOT NULL CHECK (idade >= 18),
+telefone		varchar(10) NOT NULL,
+salario			float,
+tipo_pessoa  	varchar(50) NOT NULL 
+	CHECK (tipo_pessoa in('funcionario','jogador','tecnico'))
+);
+
+
+DROP TABLE IF EXISTS time;
+CREATE TABLE time(
+nomeTime		varchar(30) NOT NULL,		
+pontos			int default 0,
+vitorias		int default 0,
+derrotas		int default 0,
+empates			int default 0,
+gols_marcados	int default 0,
+gols_sofridos	int default 0,
+saldo_de_gols	int default 0,
+cpf				varchar(20) NOT NULL,
+num_times_treinados int default 0,
+
+PRIMARY KEY(nomeTime),
+FOREIGN KEY(cpf) REFERENCES pessoa(cpf)
+);
+
+DROP TABLE IF EXISTS funcionario;
+CREATE TABLE funcionario(
+cpf				varchar(20) NOT NULL,		
+cargo 			varchar(50),
+
+PRIMARY KEY(cpf),
+FOREIGN KEY(cpf) REFERENCES pessoa(cpf)
+);
+
+DROP TABLE IF EXISTS jogador;
+CREATE TABLE jogador(
+cpf				varchar(20) NOT NULL,		
+gols_marcados 	int default 0,
+nomeTime 		varchar(30),
+
+PRIMARY KEY(cpf),
+FOREIGN KEY(cpf) REFERENCES pessoa(cpf),
+FOREIGN KEY(nomeTime) REFERENCES time(nomeTime)
+);
+
+DROP TABLE IF EXISTS estadio;
+CREATE TABLE estadio(
+nomeEstadio		varchar(30) NOT NULL,		
+num_assentos 	int default 3000,
+nomeTime		varchar(30) NOT NULL,
+
+PRIMARY KEY(nomeEstadio),
+FOREIGN KEY(nomeTime) REFERENCES time(nomeTime)
+);
+
+DROP TABLE IF EXISTS campeonato;
+CREATE TABLE campeonato(
+anoCampeonato	int NOT NULL,		
+campeao 		varchar(30),
+
+PRIMARY KEY(anoCampeonato),
+FOREIGN KEY(campeao) REFERENCES time(nomeTime)
+);
+
+DROP TABLE IF EXISTS rodada;
+CREATE TABLE rodada(
+dataRodada		date NOT NULL,
+anoCampeonato	int NOT NULL,
+
+PRIMARY KEY(dataRodada),
+FOREIGN KEY(anoCampeonato) REFERENCES campeonato(anoCampeonato)
+);
+
+DROP TABLE IF EXISTS participa;
+CREATE TABLE participa(
+nomeTime		varchar(30) NOT NULL,
+anoCampeonato	int NOT NULL,
+
+PRIMARY KEY(nomeTime,anoCampeonato),
+FOREIGN KEY(nomeTime) REFERENCES time(nomeTime),
+FOREIGN KEY(anoCampeonato) REFERENCES campeonato(anoCampeonato)
+);
+
+DROP TABLE IF EXISTS partida;
+CREATE TABLE partida(
+horaPartida		time NOT NULL,
+dataPartida		date NOT NULL,
+gols_time_1		int NOT NULL,
+gols_time_2		int NOT NULL,
+nomeTime1		varchar(30) NOT NULL,
+nomeTime2		varchar(30) NOT NULL,
+nomeEstadio		varchar(30) NOT NULL,
+dataRodada		date NOT NULL,
+
+PRIMARY KEY(horaPartida,dataPartida),
+FOREIGN KEY(nomeTime1) REFERENCES time(nomeTime),
+FOREIGN KEY(nomeTime2) REFERENCES time(nomeTime),
+FOREIGN KEY(nomeEstadio) REFERENCES estadio(nomeEstadio),
+FOREIGN KEY(dataRodada) REFERENCES rodada(dataRodada)
+);
+
+
+
+DROP TABLE IF EXISTS trabalhou_na;
+CREATE TABLE trabalhou_na(
+cpf				varchar(20) NOT NULL,
+dataPartida		date NOT NULL,
+horaPartida		time NOT NULL,
+
+PRIMARY KEY(cpf, dataPartida, horaPartida),
+FOREIGN KEY(cpf) REFERENCES funcionario(cpf),
+FOREIGN KEY(dataPartida,horaPartida) REFERENCES partida(dataPartida,horaPartida)
+);
+
+
+--TRIGGER ATUALIZA GOLS
+CREATE OR REPLACE FUNCTION att_gols() RETURNS TRIGGER AS $$
+    DECLARE 
+        time1 varchar(30);
+        time2 varchar(30);
+        gols1 int;
+        gols2 int;
+    BEGIN
+        time1:= inserted.nometime1 FROM inserted;
+        time2:= inserted.nometime2 FROM inserted;
+
+        gols1:= inserted.gols_time_1 FROM inserted;
+        gols2:= inserted.gols_time_2 FROM inserted;
+
+        UPDATE time
+        SET gols_marcados = gols_marcados + gols1 WHERE nometime = time1;
+
+        UPDATE time
+        SET gols_marcados = gols_marcados + gols2 WHERE nometime = time2;
+
+        UPDATE time
+        SET gols_sofridos = gols_sofridos + gols2 WHERE nometime = time1;
+
+        UPDATE time
+        SET gols_sofridos = gols_sofridos + gols1 WHERE nometime = time2;
+
+        UPDATE time
+        SET saldo_de_gols = gols_marcados - gols_sofridos WHERE nometime = time1;
+
+        UPDATE time
+        SET saldo_de_gols = gols_marcados - gols_sofridos WHERE nometime = time2;
+
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE TRIGGER att_gols
+AFTER INSERT ON partida REFERENCING NEW TABLE AS inserted
+EXECUTE PROCEDURE att_gols();
+
+--TRIGGER ATUALIZA VITORIAS
+CREATE OR REPLACE FUNCTION att_vitorias() RETURNS TRIGGER AS $$
+    DECLARE 
+        time1 varchar(30);
+        time2 varchar(30);
+        gols1 int;
+        gols2 int;
+    BEGIN
+        time1:= inserted.nometime1 FROM inserted;
+        time2:= inserted.nometime2 FROM inserted;
+
+        gols1:= inserted.gols_time_1 FROM inserted;
+        gols2:= inserted.gols_time_2 FROM inserted;
+
+        IF (gols1 > gols2) THEN
+            UPDATE time
+            SET vitorias = vitorias + 1 WHERE nometime = time1;
+
+            UPDATE time
+            SET derrotas = derrotas + 1 WHERE nometime = time2;
+        END IF;
+        IF (gols1 = gols2) THEN
+            UPDATE time
+            SET empates = empates + 1 WHERE nometime = time1;
+
+            UPDATE time
+            SET empates = empates + 1 WHERE nometime = time2;
+        END IF;
+        IF (gols1 < gols2) THEN
+            UPDATE time
+            SET vitorias = vitorias + 1 WHERE nometime = time2;
+
+            UPDATE time
+            SET derrotas = derrotas + 1 WHERE nometime = time1;
+        END IF;
+
+        UPDATE time
+        SET pontos = 3*vitorias + empates WHERE nometime = time1;
+
+        UPDATE time
+        SET pontos = 3*vitorias + empates WHERE nometime = time2;
+
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE TRIGGER att_vitorias
+AFTER INSERT ON partida REFERENCING NEW TABLE AS inserted
+EXECUTE PROCEDURE att_vitorias();
+--------------------------------------------------------------
+SELECT * FROM pessoa;
+SELECT * FROM funcionario;
+SELECT * FROM time;
+SELECT * FROM jogador;
+SELECT * FROM estadio;
+SELECT * FROM campeonato;
+SELECT * FROM rodada;
+SELECT * FROM participa;
+SELECT * FROM partida;
+SELECT * FROM trabalhou_na;
+
+
+--PESSOA
+INSERT INTO pessoa VALUES('111.111.111-11','José',20,'91111-1111',1230.99,'jogador');
+INSERT INTO pessoa VALUES('111.111.111-12','João',20,'91111-1111',1230.99,'jogador');
+INSERT INTO pessoa VALUES('111.111.111-13','Gustav',20,'91111-1111',1230.99,'funcionario');
+INSERT INTO pessoa VALUES('112.111.111-11','Cleber',22,'91111-1111',1230.99,'tecnico');
+INSERT INTO pessoa VALUES('111.113.111-11','Afonso',18,'91111-1111',1230.99,'funcionario');
+
+--FUNCIONARIO
+INSERT INTO funcionario VALUES('111.113.111-11','Bandeirinha');
+
+--TIME
+INSERT INTO time (nomeTime, cpf) VALUES('Flamengo','112.111.111-11');
+INSERT INTO time (nomeTime, cpf) VALUES('Palmeiras','111.111.111-11');
+
+DELETE FROM time;
+
+--JOGADOR
+INSERT INTO jogador (cpf, nomeTime) VALUES('111.111.111-11','Flamengo');
+INSERT INTO jogador (cpf, gols_marcados, nomeTime) VALUES('111.111.111-12','5','Flamengo');
+INSERT INTO jogador (cpf, gols_marcados, nomeTime) VALUES('111.111.111-13','8','Flamengo');
+
+DELETE FROM jogador;
+
+--ESTADIO
+INSERT INTO estadio VALUES ('Itaquera',40000,'Flamengo');
+
+DELETE FROM ESTADIO;
+
+--CAMPEONATO
+INSERT INTO campeonato VALUES(2020,'Flamengo');
+INSERT INTO campeonato (anoCampeonato) VALUES(2022);
+
+DELETE FROM campeonato;
+
+--RODADA
+INSERT INTO rodada VALUES('2020-09-03',2020);
+INSERT INTO rodada VALUES('2020-09-08',2020);
+INSERT INTO rodada VALUES('2020-09-10',2022);
+
+DELETE FROM RODADA;
+
+--PARTICIPA
+INSERT INTO participa VALUES('Flamengo',2020);
+INSERT INTO participa VALUES('Palmeiras',2020);
+INSERT INTO participa VALUES('Flamengo',2022);
+
+DELETE FROM participa;
+
+
+--PARTIDA
+INSERT INTO partida VALUES('15:00:00','2020-09-05',3,2,'Flamengo','Palmeiras','Itaquera','2020-09-03');
+INSERT INTO partida VALUES('15:00:00','2020-09-07',3,2,'Flamengo','Palmeiras','Itaquera','2020-09-03');
+INSERT INTO partida VALUES('16:00:00','2020-09-11',3,2,'Flamengo','Palmeiras','Itaquera','2020-09-03');
+
+DELETE FROM partida;
+
+--TRABALHOU_NA
+INSERT INTO trabalhou_na VALUES('111.113.111-11','2020-09-05','15:00:00');
+INSERT INTO trabalhou_na VALUES('111.113.111-11','2020-09-07','15:00:00');
+
+DELETE FROM trabalhou_na;
+
+--------------------------------------------------------------------------------------------------------------
+
+-- Consulta 1 --
+SELECT gols_time_1, gols_time_2
+FROM partida
+WHERE datapartida = '2020-09-05' and horapartida = '15:00:00';
+
+-- Consulta 2 --
+SELECT * FROM funcionario natural join pessoa;
+
+-- Consulta 3 --
+SELECT cpf, nomePessoa
+FROM trabalhou_na natural join pessoa
+WHERE datapartida = '2020-09-05' and horapartida = '15:00:00';
+
+-- Consulta 4 --
+SELECT nomeTime1 as nometime, mediaCasa, mediaVisitante
+FROM (SELECT nomeTime1, AVG(gols_time_1) as mediaCasa
+	  FROM partida
+	  WHERE nometime1 = 'Flamengo'
+	  GROUP BY nomeTime1) as t1 full outer join (SELECT nomeTime2, AVG(gols_time_2) as mediaVisitante
+			FROM partida
+			WHERE nometime2 = 'Flamengo' GROUP BY nomeTime2) as t2
+			ON t1.nometime1 = t2.nometime2;
+			
+-- Consulta 5 --
+SELECT nomeEstadio, count(nomeEstadio) as qtd
+FROM partida
+WHERE nomeestadio = 'Itaquera'
+GROUP BY nomeEstadio;
+
+-- Consulta 6 --
+SELECT anoCampeonato, count(nometime) as participantes
+FROM participa
+WHERE anoCampeonato = 2020
+GROUP BY anoCampeonato;
+
+-- Consulta 7 --
+SELECT num_times_treinados 
+FROM time 
+WHERE cpf = '112.111.111-11';
+
+-- Consulta 8 --
+SELECT anoCampeonato, count(dataRodada) FROM rodada WHERE anoCampeonato = 2020
+GROUP BY anoCampeonato;
+
+SELECT gols_marcados FROM time WHERE nomeTime = 'Flamengo';
+SELECT pontos FROM time WHERE nomeTime = 'Flamengo';
